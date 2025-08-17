@@ -1,101 +1,64 @@
 <div align="center">
 
-<p align="center">
-    <img src="https://raw.githubusercontent.com/rednote-hilab/dots.ocr/master/assets/logo.png" width="300"/>
-<p>
+<h1 align="center">dots.ocr</h1>
 
-<h1 align="center">
-dots.ocr: Multilingual Document Layout Parsing in a Single Vision-Language Model
-</h1>
-
-[![Blog](https://img.shields.io/badge/Blog-View_on_GitHub-333.svg?logo=github)](https://github.com/rednote-hilab/dots.ocr/blob/master/assets/blog.md)
-[![HuggingFace](https://img.shields.io/badge/HuggingFace%20Weights-black.svg?logo=HuggingFace)](https://huggingface.co/rednote-hilab/dots.ocr)
-
-
-<div align="center">
-  <a href="https://dotsocr.xiaohongshu.com" target="_blank" rel="noopener noreferrer"><strong>🖥️ Live Demo</strong></a> | 
-  <a href="https://raw.githubusercontent.com/rednote-hilab/dots.ocr/master/assets/wechat.jpg" target="_blank" rel="noopener noreferrer"><strong>💬 WeChat</strong></a> | 
-  <a href="https://www.xiaohongshu.com/user/profile/683ffe42000000001d021a4c" target="_blank" rel="noopener noreferrer"><strong>📕 rednote</strong></a>
-</div>
+<p>一个统一文档布局解析与内容识别的多语种视觉语言模型（约 1.7B 参数）。</p>
 
 </div>
 
 
+### 特性（简要）
+- 单模型同时完成版面检测、文本/表格/公式识别与阅读顺序；
+- 提供 CLI、Gradio Web、vLLM 服务三种使用方式；
+- 输出结构化 JSON 与 Markdown，可直接用于检索与重建。
 
-## 中文快速开始与部署指南
 
-本项目提供两种推理路径：
-- 方式A（推荐入门）：基于 Transformers 的本地推理（无需启动服务，Gradio 默认走此路径）。
-- 方式B（高性能/服务化）：基于 vLLM 的 OpenAI 接口服务，支持本地或 Docker 部署。
+## 快速开始
 
-下文给出你可以直接复制运行的“可落地命令”，并结合实际踩坑总结了常见问题与修复方式。
-
-### 0. 环境准备
-- 建议使用 Conda 管理环境：`python` 3.12
-- GPU 环境建议安装匹配 CUDA 的 PyTorch（示例为 CUDA 12.8）。
-
+### 环境
 ```bash
 conda create -n dots_ocr python=3.12 -y
 conda activate dots_ocr
-
-# 根据你的 CUDA 版本选择安装（以下为 CUDA 12.8 示例）
+# 依据你的 CUDA 版本安装 PyTorch（此处以 CUDA 12.8 为例）
 pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 \
   --index-url https://download.pytorch.org/whl/cu128
-
-# 安装项目（开发模式）
 pip install -e .
 ```
 
-如遇 `flash-attn` 编译或兼容问题，先使用“无 flash-attn”依赖快速跑通：
-
+遇到 `flash-attn` 安装问题：
 ```bash
 pip install -r requirements_no_flash.txt --no-deps
 ```
 
-### 1. 下载模型权重
-权重必须保存在不包含点号的目录名中（例如 `weights/DotsOCR`），否则会导致加载或 vLLM 注册失败。
-
+### 下载权重
 ```bash
-python3 tools/download_model.py                 # 默认从 Hugging Face 下载
-# 或使用 ModelScope：
-python3 tools/download_model.py --type modelscope
+python3 tools/download_model.py
+# 或：python3 tools/download_model.py --type modelscope
 ```
+注意：权重目录需为 `weights/DotsOCR`（目录名不能包含点号）。
 
-### 2A. 本地 Transformers 推理（推荐新手，最省事）
-无需启动任何服务，直接运行：
-
+### 使用方式 A：Transformers（本地，默认）
 ```bash
-# 直接跑 HF 示例
+# 直接运行示例
 python3 demo/demo_hf.py
 
-# 启动 Gradio（默认已走 HF，无需额外配置）
+# 启动 Gradio（默认走 HF）
 export DOTSOCR_USE_HF=1
 python demo/demo_gradio.py 7861
 
-# 命令行解析图片或 PDF（HF 推理）
+# CLI 解析
 python3 dots_ocr/parser.py demo/demo_image1.jpg --use_hf true
-python3 dots_ocr/parser.py demo/demo_pdf1.pdf  --use_hf true --num_thread 64
+python3 dots_ocr/parser.py demo/demo_pdf1.pdf --use_hf true --num_thread 64
 ```
 
-解析完成后，结果会保存到 `output/<文件名>/` 下，包含：
-- `<name>.json`：结构化版面元素（bbox、category、text）
-- `<name>.jpg`：检测框可视化
-- `<name>.md` 与 `<name>_nohf.md`：拼接文本（后者去掉页眉页脚，便于评测）
-
-### 2B. 本地 vLLM 服务（更快/易扩展）
-先注册模型、再启动 vLLM 服务，然后使用 CLI 或 demo 访问。
-
+### 使用方式 B：vLLM（本地服务）
 ```bash
-# 安装 vLLM（按 README 建议使用 0.9.1）
 pip install "vllm==0.9.1"
-
-# 注册模型（关键：将权重目录父目录加入 PYTHONPATH，并对 vllm 入口插入注册行）
 export hf_model_path=./weights/DotsOCR
 export PYTHONPATH=$(dirname "$hf_model_path"):$PYTHONPATH
 sed -i '/^from vllm\.entrypoints\.cli\.main import main$/a\
 from DotsOCR import modeling_dots_ocr_vllm' "$(which vllm)"
 
-# 启动 vLLM 服务（OpenAI 接口）
 CUDA_VISIBLE_DEVICES=0 vllm serve ${hf_model_path} \
   --tensor-parallel-size 1 \
   --gpu-memory-utilization 0.95 \
@@ -103,108 +66,64 @@ CUDA_VISIBLE_DEVICES=0 vllm serve ${hf_model_path} \
   --served-model-name model \
   --trust-remote-code
 
-# 调用方式1：命令行解析（默认走 vLLM）
+# 访问
 python3 dots_ocr/parser.py demo/demo_image1.jpg
-
-# 调用方式2：vLLM API 示例
 python3 demo/demo_vllm.py --prompt_mode prompt_layout_all_en
 ```
 
-若遇 `ModuleNotFoundError: No module named 'DotsOCR'`，请核对：
-- 权重目录是否为 `weights/DotsOCR`（目录名不得包含点号）。
-- 是否执行了 `export PYTHONPATH=$(dirname "$hf_model_path"):$PYTHONPATH`。
-- 是否执行了对 `vllm` 入口文件的 `sed` 插入注册行。
-
-### 2C. Docker 一键部署 vLLM 服务（推荐生产）
-使用官方镜像 [`rednotehilab/dots.ocr`](https://hub.docker.com/r/rednotehilab/dots.ocr)：
-
-```bash
-sudo docker pull rednotehilab/dots.ocr:vllm-openai-v0.9.1
-
-# 标准启动
-sudo docker run -d \
-  --name dots-ocr \
-  --gpus all \
-  -p 8000:8000 \
-  rednotehilab/dots.ocr:vllm-openai-v0.9.1
-
-# 高性能参考（更大的共享内存与内存限制、长超时、防止重启丢失）
-sudo docker run -d \
-  --name dots-ocr-high-perf \
-  --gpus all \
-  -p 8000:8000 \
-  --shm-size=8g \
-  --memory=32g \
-  --restart unless-stopped \
-  -e CUDA_VISIBLE_DEVICES=0 \
-  -e HF_HOME=/tmp/huggingface \
-  -e TRANSFORMERS_CACHE=/tmp/huggingface \
-  rednotehilab/dots.ocr:vllm-openai-v0.9.1 \
-  --model rednote-hilab/dots.ocr \
-  --host 0.0.0.0 \
-  --port 8000 \
-  --gpu-memory-utilization 0.9 \
-  --max-model-len 8192 \
-  --tensor-parallel-size 1 \
-  --trust-remote-code
-
-# 查看日志与状态
-sudo docker ps | grep dots-ocr
-sudo docker logs --tail 100 dots-ocr-high-perf
-```
-
-服务启动后，可直接用上面的“方式2B 调用方式1/2”，或使用自带 Gradio：
-
-```bash
-# Gradio 默认走 HF，如果你只启动了 vLLM，可以在界面切换到 vLLM 模式
-python demo/demo_gradio.py 7861
-```
-
-### 3. 常见问题排查（来自真实使用经验）
-- 模型目录名必须不含点号：务必使用 `weights/DotsOCR`。
-- `flash-attn` 安装失败：先用 `requirements_no_flash.txt` 跑通；有需要再单独尝试
-  `pip install flash-attn==2.8.3 --no-build-isolation`（或与你的 CUDA 匹配的版本）。
-- vLLM 报 `ModuleNotFoundError: DotsOCR`：按“2B”检查三点（目录名、PYTHONPATH、sed 注册）。
-- 显存不足或吞吐低：降低 `--gpu-memory-utilization`，或调小 `--max-model-len`、`--max-num-seqs` 等；
-  Docker 下适当调大 `--shm-size` 与容器可用内存。
-
-### 4. 我们验证过的启动命令（可直接复用）
-- HF 本地：
-```bash
-conda activate dots_ocr
-python3 tools/download_model.py
-export DOTSOCR_USE_HF=1
-python demo/demo_gradio.py 7861
-python3 dots_ocr/parser.py demo/demo_image1.jpg --use_hf true
-```
-
-- vLLM 本地：
-```bash
-pip install "vllm==0.9.1"
-export hf_model_path=./weights/DotsOCR
-export PYTHONPATH=$(dirname "$hf_model_path"):$PYTHONPATH
-sed -i '/^from vllm\.entrypoints\.cli\.main import main$/a\
-from DotsOCR import modeling_dots_ocr_vllm' "$(which vllm)"
-CUDA_VISIBLE_DEVICES=0 vllm serve ${hf_model_path} \
-  --tensor-parallel-size 1 --gpu-memory-utilization 0.95 \
-  --chat-template-content-format string --served-model-name model --trust-remote-code
-python3 demo/demo_vllm.py --prompt_mode prompt_layout_all_en
-```
-
-- Docker vLLM：
+### 使用方式 C：Docker（服务化/生产）
 ```bash
 sudo docker pull rednotehilab/dots.ocr:vllm-openai-v0.9.1
 sudo docker run -d --name dots-ocr --gpus all -p 8000:8000 \
   rednotehilab/dots.ocr:vllm-openai-v0.9.1
+
+# 高性能参数示例（可按显存与吞吐调整）
+sudo docker run -d --name dots-ocr-high-perf --gpus all -p 8000:8000 \
+  --shm-size=8g --memory=32g --restart unless-stopped \
+  -e CUDA_VISIBLE_DEVICES=0 -e HF_HOME=/tmp/huggingface -e TRANSFORMERS_CACHE=/tmp/huggingface \
+  rednotehilab/dots.ocr:vllm-openai-v0.9.1 \
+  --model rednote-hilab/dots.ocr --host 0.0.0.0 --port 8000 \
+  --gpu-memory-utilization 0.9 --max-model-len 8192 --tensor-parallel-size 1 \
+  --trust-remote-code
 ```
 
-> 说明：上面命令均已在真实环境中跑通，并与当前仓库默认配置（Gradio 默认 HF，可切换 vLLM）保持一致。
 
-## Introduction
+## CLI 与输出
+```bash
+# 全流程：检测+识别
+python3 dots_ocr/parser.py demo/demo_image1.jpg
+python3 dots_ocr/parser.py demo/demo_pdf1.pdf --num_thread 64
 
-**dots.ocr** is a powerful, multilingual document parser that unifies layout detection and content recognition within a single vision-language model while maintaining good reading order. Despite its compact 1.7B-parameter LLM foundation, it achieves state-of-the-art(SOTA) performance.
+# 仅检测
+python3 dots_ocr/parser.py demo/demo_image1.jpg --prompt prompt_layout_only_en
 
-1. **Powerful Performance:** **dots.ocr** achieves SOTA performance for text, tables, and reading order on [OmniDocBench](https://github.com/opendatalab/OmniDocBench), while delivering formula recognition results comparable to much larger models like Doubao-1.5 and gemini2.5-pro.
+# 仅文本
+python3 dots_ocr/parser.py demo/demo_image1.jpg --prompt prompt_ocr
+
+# 区域 OCR（给定 bbox）
+python3 dots_ocr/parser.py demo/demo_image1.jpg --prompt prompt_grounding_ocr --bbox 163 241 1536 705
+```
+输出目录：`output/<文件名>/`，包含 `*.json`（结构化结果）、`*.jpg`（检测可视化）、`*.md` 与 `*_nohf.md`（文本合并）。
+
+
+## 常见问题
+- `ModuleNotFoundError: DotsOCR`：确认权重目录名、已导出 PYTHONPATH、已注入 vLLM 入口注册行。
+- `flash-attn` 装不动：先用 `requirements_no_flash.txt` 跑通；再按 CUDA 版本尝试合适的 `flash-attn` 版本。
+- 显存/吞吐：调小 `--gpu-memory-utilization`、`--max-model-len`；适当增大 Docker `--shm-size`。
+
+
+## 目录结构（简要）
+- `dots_ocr/parser.py`：高层解析 API 与 CLI
+- `dots_ocr/model/inference.py`：vLLM OpenAI 接口调用
+- `dots_ocr/utils/*`：图像处理/提示词/版面坐标后处理/Markdown 输出
+- `tools/download_model.py`：权重下载
+- `demo/`：`demo_gradio.py`、`demo_vllm.py`、`demo_hf.py`
+
+
+## 许可与致谢
+- 许可：见仓库 `LICENSE` 与 `dots.ocr LICENSE AGREEMENT`。
+- 致谢：Qwen2.5-VL、vLLM、PyMuPDF 等开源项目与社区贡献。
+
 2. **Multilingual Support:** **dots.ocr** demonstrates robust parsing capabilities for low-resource languages, achieving decisive advantages across both layout detection and content recognition on our in-house multilingual documents benchmark.
 3. **Unified and Simple Architecture:** By leveraging a single vision-language model, **dots.ocr** offers a significantly more streamlined architecture than conventional methods that rely on complex, multi-model pipelines. Switching between tasks is accomplished simply by altering the input prompt, proving that a VLM can achieve competitive detection results compared to traditional detection models like DocLayout-YOLO.
 4.  **Efficient and Fast Performance:** Built upon a compact 1.7B LLM, **dots.ocr** provides faster inference speeds than many other high-performing models based on larger foundations.
