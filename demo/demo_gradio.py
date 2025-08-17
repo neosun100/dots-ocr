@@ -43,12 +43,16 @@ DEFAULT_CONFIG = {
 current_config = DEFAULT_CONFIG.copy()
 
 # Create DotsOCRParser instance
+# Allow switching between vLLM server and HF transformers via env var
+# Default to HF to avoid needing a running vLLM server locally
+USE_HF = os.environ.get("DOTSOCR_USE_HF", "1").lower() in ("1", "true", "yes", "y")
 dots_parser = DotsOCRParser(
     ip=DEFAULT_CONFIG['ip'],
     port=DEFAULT_CONFIG['port_vllm'],
     dpi=200,
     min_pixels=DEFAULT_CONFIG['min_pixels'],
-    max_pixels=DEFAULT_CONFIG['max_pixels']
+    max_pixels=DEFAULT_CONFIG['max_pixels'],
+    use_hf=USE_HF,
 )
 
 def get_initial_session_state():
@@ -292,7 +296,7 @@ def parse_pdf_with_high_level_api(parser, pdf_path, prompt_mode):
 
 # ==================== Core Processing Function ====================
 def process_image_inference(session_state, test_image_input, file_input,
-                          prompt_mode, server_ip, server_port, min_pixels, max_pixels,
+                          prompt_mode, backend_choice, server_ip, server_port, min_pixels, max_pixels,
                           fitz_preprocess=False
                           ):
     """Core function to handle image/PDF inference"""
@@ -314,14 +318,28 @@ def process_image_inference(session_state, test_image_input, file_input,
         'ip': server_ip,
         'port_vllm': server_port,
         'min_pixels': min_pixels,
-        'max_pixels': max_pixels
+        'max_pixels': max_pixels,
+        'backend': backend_choice,
     })
-    
-    # Update parser configuration
-    dots_parser.ip = server_ip
-    dots_parser.port = server_port
-    dots_parser.min_pixels = min_pixels
-    dots_parser.max_pixels = max_pixels
+
+    # Ensure parser backend matches user choice
+    global dots_parser
+    desired_use_hf = (backend_choice.startswith('HF'))
+    if getattr(dots_parser, 'use_hf', None) != desired_use_hf:
+        dots_parser = DotsOCRParser(
+            ip=server_ip,
+            port=server_port,
+            dpi=200,
+            min_pixels=min_pixels,
+            max_pixels=max_pixels,
+            use_hf=desired_use_hf,
+        )
+    else:
+        # Update parser configuration
+        dots_parser.ip = server_ip
+        dots_parser.port = server_port
+        dots_parser.min_pixels = min_pixels
+        dots_parser.max_pixels = max_pixels
     
     input_file_path = file_input if file_input else test_image_input
     
@@ -348,7 +366,7 @@ def process_image_inference(session_state, test_image_input, file_input,
             })
             
             total_elements = len(pdf_result['combined_cells_data'])
-            info_text = f"**PDF Information:**\n- Total Pages: {pdf_result['total_pages']}\n- Server: {current_config['ip']}:{current_config['port_vllm']}\n- Total Detected Elements: {total_elements}\n- Session ID: {pdf_result['session_id']}"
+            info_text = f"**PDF Information:**\n- Total Pages: {pdf_result['total_pages']}\n- Backend: {backend_choice}\n- Server: {current_config['ip']}:{current_config['port_vllm']}\n- Total Detected Elements: {total_elements}\n- Session ID: {pdf_result['session_id']}"
             
             current_page_layout_image = preview_image
             current_page_json = ""
@@ -401,7 +419,7 @@ def process_image_inference(session_state, test_image_input, file_input,
             })
             
             num_elements = len(parse_result['cells_data']) if parse_result['cells_data'] else 0
-            info_text = f"**Image Information:**\n- Original Size: {original_image.width} x {original_image.height}\n- Model Input Size: {parse_result['input_width']} x {parse_result['input_height']}\n- Server: {current_config['ip']}:{current_config['port_vllm']}\n- Detected {num_elements} layout elements\n- Session ID: {parse_result['session_id']}"
+            info_text = f"**Image Information:**\n- Original Size: {original_image.width} x {original_image.height}\n- Model Input Size: {parse_result['input_width']} x {parse_result['input_height']}\n- Backend: {backend_choice}\n- Server: {current_config['ip']}:{current_config['port_vllm']}\n- Detected {num_elements} layout elements\n- Session ID: {parse_result['session_id']}"
             
             current_json = json.dumps(parse_result['cells_data'], ensure_ascii=False, indent=2) if parse_result['cells_data'] else ""
             
@@ -553,6 +571,17 @@ def create_gradio_interface():
                     choices=["prompt_layout_all_en", "prompt_layout_only_en", "prompt_ocr"],
                     value="prompt_layout_all_en",
                 )
+
+                backend_choice = gr.Radio(
+                    label="Inference Backend",
+                    choices=["HF (Transformers)", "vLLM Server"],
+                    value=("HF (Transformers)" if USE_HF else "vLLM Server"),
+                )
+
+                # Server config row (shown only for vLLM backend)
+                with gr.Row(visible=(not USE_HF)) as server_row:
+                    server_ip = gr.Textbox(label="Server IP", value=DEFAULT_CONFIG['ip'])
+                    server_port = gr.Number(label="Port", value=DEFAULT_CONFIG['port_vllm'], precision=0)
                 
                 # Display current prompt content
                 prompt_display = gr.Textbox(
@@ -574,9 +603,6 @@ def create_gradio_interface():
                         value=True,
                         info="Processes image via a PDF-like pipeline (image->pdf->200dpi image). Recommended if your image DPI is low."
                     )
-                    with gr.Row():
-                        server_ip = gr.Textbox(label="Server IP", value=DEFAULT_CONFIG['ip'])
-                        server_port = gr.Number(label="Port", value=DEFAULT_CONFIG['port_vllm'], precision=0)
                     with gr.Row():
                         min_pixels = gr.Number(label="Min Pixels", value=DEFAULT_CONFIG['min_pixels'], precision=0)
                         max_pixels = gr.Number(label="Max Pixels", value=DEFAULT_CONFIG['max_pixels'], precision=0)
@@ -660,6 +686,15 @@ def create_gradio_interface():
             inputs=prompt_mode,
             outputs=prompt_display,
         )
+
+        # Toggle server IP/port visibility based on backend
+        def _toggle_server_row(backend):
+            return gr.update(visible=backend.endswith('Server'))
+        backend_choice.change(
+            fn=_toggle_server_row,
+            inputs=[backend_choice],
+            outputs=[server_row]
+        )
         
         # Show preview on file upload
         file_input.upload(
@@ -693,7 +728,7 @@ def create_gradio_interface():
             fn=process_image_inference,
             inputs=[
                 session_state, test_image_input, file_input,
-                prompt_mode, server_ip, server_port, min_pixels, max_pixels, 
+                prompt_mode, backend_choice, server_ip, server_port, min_pixels, max_pixels,
                 fitz_preprocess
             ],
             outputs=[

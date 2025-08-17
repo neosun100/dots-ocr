@@ -21,6 +21,7 @@ from dots_ocr.utils.format_transformer import layoutjson2md
 from dots_ocr.utils.layout_utils import draw_layout_on_image, post_process_cells
 from dots_ocr.utils.image_utils import get_input_dimensions, get_image_by_fitz_doc
 from dots_ocr.model.inference import inference_with_vllm
+from dots_ocr.parser import DotsOCRParser
 from dots_ocr.utils.consts import MIN_PIXELS, MAX_PIXELS
 
 import os
@@ -65,6 +66,7 @@ def create_config_sidebar():
     
     config = {}
     config['prompt_key'] = st.sidebar.selectbox("Prompt Mode", list(dict_promptmode_to_prompt.keys()))
+    config['backend'] = st.sidebar.radio("Inference Backend", ["HF (Transformers)", "vLLM Server"], index=0 if os.environ.get("DOTSOCR_USE_HF", "1").lower() in ("1","true","yes","y") else 1)
     config['ip'] = st.sidebar.text_input("Server IP", DEFAULT_CONFIG['ip'])
     config['port'] = st.sidebar.number_input("Port", min_value=1000, max_value=9999, value=DEFAULT_CONFIG['port_vllm'])
     # config['eos_word'] = st.sidebar.text_input("EOS Word", DEFAULT_CONFIG['eos_word'])
@@ -201,16 +203,36 @@ def main():
     output = None
     # Inference button
     if start_button:
-        with st.spinner(f"Inferring... Server: {config['ip']}:{config['port']}"):
-            
-            response = inference_with_vllm(
-                processed_image, prompt, config['ip'], config['port'],
-                # config['min_pixels'], config['max_pixels']
-            )
-            output = {
-                'prompt': prompt,
-                'response': response,
-            }
+        with st.spinner(f"Inferring..."):
+            # Use backend selected in sidebar
+            use_hf = config['backend'].startswith('HF')
+            if use_hf:
+                parser = DotsOCRParser(use_hf=True, min_pixels=config['min_pixels'], max_pixels=config['max_pixels'])
+                try:
+                    result = parser.parse_image(processed_image, filename="ui", prompt_mode=config['prompt_key'], save_dir=tempfile.mkdtemp())
+                    # Read layout JSON written by high-level API to produce a response string
+                    response_text = None
+                    if isinstance(result, list) and result:
+                        info = result[0]
+                        layout_path = info.get('layout_info_path')
+                        if layout_path and os.path.exists(layout_path):
+                            with open(layout_path, 'r', encoding='utf-8') as f:
+                                response_text = f.read()
+                    output = {
+                        'prompt': prompt,
+                        'response': response_text,
+                    }
+                except Exception as e:
+                    st.error(f"HF inference failed: {e}")
+                    output = None
+            else:
+                response = inference_with_vllm(
+                    processed_image, prompt, config['ip'], config['port'],
+                )
+                output = {
+                    'prompt': prompt,
+                    'response': response,
+                }
     else:
         st.image(processed_image, width=500)
 
